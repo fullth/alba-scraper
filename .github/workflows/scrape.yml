@@ -1,4 +1,4 @@
-name: 양천구 알바 스크래핑
+name: 알바 스크래핑
 
 on:
   schedule:

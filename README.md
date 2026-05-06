@@ -13,7 +13,10 @@
 
 ## 지역 변경 방법
 
-`scrape.py` 상단의 `ALBAMON_AREAS` 딕셔너리만 바꾼다. 키는 알바몬 sigu 코드, 값은 잡코리아 키워드 검색에 들어갈 지역명.
+`scrape.py` 상단의 `ALBAMON_AREAS` 딕셔너리 **한 곳만** 바꾸면 알바몬/잡코리아/메일 제목/후처리 필터에 모두 반영된다.
+
+- 키 = 알바몬 sigu 코드 (알바몬 검색 URL에 사용)
+- 값 = 한글 지역명 (잡코리아 키워드 검색 + 메일 제목 + 결과 후처리 필터에 사용)
 
 ```python
 ALBAMON_AREAS = {
@@ -30,9 +33,7 @@ ALBAMON_AREAS = {
 https://api-code.albamon.com/codes/areas/korean/sigu/codes
 ```
 
-같은 파일의 `target_gus`(잡코리아 결과 후처리 필터)도 같이 갱신해야 한다 — `main()` 안의 `target_gus = {"양천구", "강서구", "영등포구", "구로구"}` 이 부분이다.
-
-키워드를 바꾸고 싶으면 `SHORT_TERM_KEYWORDS` (알바 매칭) 또는 `JOBKOREA_KEYWORDS` (잡코리아 검색어)도 같은 파일 위쪽에서 수정한다.
+키워드를 바꾸고 싶으면 같은 파일 위쪽의 `SHORT_TERM_KEYWORDS` (단기 매칭 후처리) 또는 `JOBKOREA_KEYWORDS` (잡코리아에 보내는 검색어)를 수정한다.
 
 ## GitHub Secrets 필요값
 
@@ -42,9 +43,16 @@ https://api-code.albamon.com/codes/areas/korean/sigu/codes
 | `GMAIL_APP_PASSWORD` | Gmail 앱 비밀번호 (16자) |
 | `GMAIL_TO` | 수신자 (생략 시 GMAIL_USER로 자기 자신에게 발송) |
 
+### Gmail 앱 비밀번호 발급
+
+1. 2단계 인증 활성화: https://myaccount.google.com/security
+2. 앱 비밀번호 생성: https://myaccount.google.com/apppasswords
+3. 앱 이름 입력 → 만들기 → 16자 비밀번호 복사
+4. 위 `GMAIL_APP_PASSWORD` 시크릿에 붙여넣기 (공백 제거)
+
 ## 수동 실행
 
-GitHub Actions → "양천구 알바 스크래핑" → Run workflow.
+GitHub Actions → "알바 스크래핑" → Run workflow.
 "신규 없어도 메일 강제 발송"을 체크하면 빈 결과여도 알림 발송.
 
 ## 로컬 실행

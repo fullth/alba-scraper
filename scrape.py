@@ -262,17 +262,22 @@ def append_history(new_jobs: list[Job]) -> None:
     )
 
 
+def _area_summary() -> str:
+    return ", ".join(ALBAMON_AREAS.values())
+
+
 def render_email_html(new_jobs: list[Job], total_seen: int) -> str:
+    area_label = _area_summary()
     if not new_jobs:
         return (
-            "<p>오늘 새로 등록된 양천구 인근 일일/단기 알바가 없습니다.</p>"
+            f"<p>오늘 새로 등록된 {area_label} 일일/단기 알바가 없습니다.</p>"
             f"<p>전체 누적 추적: {total_seen}건</p>"
         )
     by_source: dict[str, list[Job]] = {}
     for job in new_jobs:
         by_source.setdefault(job.source, []).append(job)
     parts = [
-        "<h2 style='margin:0 0 12px'>양천구 인근 신규 일일/단기 알바</h2>",
+        f"<h2 style='margin:0 0 12px'>{area_label} 신규 일일/단기 알바</h2>",
         f"<p>발견 시각: {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)<br>",
         f"신규 {len(new_jobs)}건 / 누적 추적 {total_seen}건</p>",
     ]
@@ -313,7 +318,7 @@ def send_gmail(subject: str, html_body: str) -> None:
 
 
 def main() -> int:
-    print("=== 양천구 인근 알바 스크래퍼 시작 ===")
+    print(f"=== {_area_summary()} 알바 스크래퍼 시작 ===")
     all_jobs: list[Job] = []
     for code, name in ALBAMON_AREAS.items():
         print(f"[albamon] {name}({code}) 스크래핑...")
@@ -326,8 +331,8 @@ def main() -> int:
         print(f"  -> {len(jobs)}건")
         all_jobs.extend(jobs)
 
-    # 잡코리아 결과는 키워드 매칭이라 실제 지역 필터 한 번 더 (양천/강서/영등포/구로)
-    target_gus = {"양천구", "강서구", "영등포구", "구로구"}
+    # 잡코리아 결과는 키워드 매칭이라 실제 지역 필터 한 번 더
+    target_gus = set(ALBAMON_AREAS.values())
 
     def in_target_area(job: Job) -> bool:
         if job.source != "jobkorea":
@@ -350,7 +355,7 @@ def main() -> int:
     append_history(new_jobs)
 
     if new_jobs or os.environ.get("FORCE_EMAIL"):
-        subject = f"[양천구 알바] 신규 {len(new_jobs)}건 ({datetime.now().strftime('%m/%d %H:%M')})"
+        subject = f"[알바 알림] {_area_summary()} 신규 {len(new_jobs)}건 ({datetime.now().strftime('%m/%d %H:%M')})"
         send_gmail(subject, render_email_html(new_jobs, len(seen_after)))
     else:
         print("신규 없음 - 메일 발송 생략")
