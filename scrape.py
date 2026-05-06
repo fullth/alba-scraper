@@ -1,7 +1,7 @@
 """양천구 인근 일일/단기 알바 스크래퍼 (알바몬 + 잡코리아).
 
 GitHub Actions cron으로 매일 19시 (KST) 실행.
-신규 공고를 data/seen.json과 diff하여 신규만 Gmail로 발송.
+신규 공고를 data/seen.json과 diff하여 신규만 Gmail + Telegram으로 발송.
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 SEEN_FILE = DATA_DIR / "seen.json"
 HISTORY_FILE = DATA_DIR / "history.json"
+SUBSCRIBERS_FILE = ROOT / "subscribers.json"
 
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -317,6 +318,98 @@ def send_gmail(subject: str, html_body: str) -> None:
     print(f"메일 발송 완료 -> {to_addr}")
 
 
+def render_telegram_text(new_jobs: list[Job], total_seen: int) -> str:
+    """Telegram MarkdownV2 본문 (제한적 마크다운 + 링크)."""
+    area_label = _area_summary()
+    if not new_jobs:
+        return f"오늘 새로 등록된 {area_label} 일일/단기 알바 없음.\n누적 추적 {total_seen}건."
+
+    by_source: dict[str, list[Job]] = {}
+    for job in new_jobs:
+        by_source.setdefault(job.source, []).append(job)
+
+    lines = [
+        f"🔔 *{area_label}* 신규 일일/단기 알바 *{len(new_jobs)}건*",
+        f"_{datetime.now().strftime('%Y-%m-%d %H:%M')} (KST) · 누적 {total_seen}건_",
+        "",
+    ]
+    # 알림 너무 길지 않게 사이트별 상위 10건씩
+    for src, jobs in by_source.items():
+        lines.append(f"*[{src}] {len(jobs)}건*")
+        for j in jobs[:10]:
+            title = (j.title or "(제목 없음)")[:80]
+            meta_parts = [p for p in [j.area, j.wage, j.posted] if p]
+            meta = " · ".join(meta_parts)[:120]
+            lines.append(f"• [{title}]({j.url})")
+            if meta:
+                lines.append(f"  {meta}")
+            if j.company:
+                lines.append(f"  {j.company[:40]}")
+        if len(jobs) > 10:
+            lines.append(f"  …외 {len(jobs) - 10}건")
+        lines.append("")
+    text = "\n".join(lines).strip()
+    # Telegram 메시지 한도 4096자
+    return text[:4000]
+
+
+def load_subscribers() -> list[dict]:
+    if not SUBSCRIBERS_FILE.exists():
+        return []
+    try:
+        data = json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data.get("subscribers", []) if isinstance(data, dict) else []
+
+
+def send_telegram(text: str) -> None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print("TELEGRAM_BOT_TOKEN 누락 - 텔레그램 발송 건너뜀", file=sys.stderr)
+        return
+
+    # 수신자 = subscribers.json + (옵션) Secret TELEGRAM_CHAT_ID 합집합
+    chat_ids: set[str] = set()
+    for sub in load_subscribers():
+        cid = sub.get("chat_id") if isinstance(sub, dict) else sub
+        if cid:
+            chat_ids.add(str(cid))
+    fallback = os.environ.get("TELEGRAM_CHAT_ID")
+    if fallback:
+        chat_ids.add(fallback)
+
+    if not chat_ids:
+        print("Telegram 수신자 없음 - 발송 건너뜀", file=sys.stderr)
+        return
+
+    api = f"https://api.telegram.org/bot{token}/sendMessage"
+    sent = 0
+    failed = 0
+    for cid in chat_ids:
+        try:
+            resp = requests.post(
+                api,
+                json={
+                    "chat_id": cid,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": True,
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                sent += 1
+            else:
+                failed += 1
+                print(f"Telegram 발송 실패 chat_id={cid}: {resp.status_code} {resp.text[:200]}", file=sys.stderr)
+        except requests.RequestException as exc:
+            failed += 1
+            print(f"Telegram 발송 예외 chat_id={cid}: {exc}", file=sys.stderr)
+        time.sleep(0.05)  # API 한도 (초당 30건) 여유
+    print(f"Telegram 발송 완료: 성공 {sent}건 / 실패 {failed}건")
+
+
 def main() -> int:
     print(f"=== {_area_summary()} 알바 스크래퍼 시작 ===")
     all_jobs: list[Job] = []
@@ -354,11 +447,13 @@ def main() -> int:
     save_seen(seen_after)
     append_history(new_jobs)
 
-    if new_jobs or os.environ.get("FORCE_EMAIL"):
+    should_notify = bool(new_jobs) or bool(os.environ.get("FORCE_EMAIL"))
+    if should_notify:
         subject = f"[알바 알림] {_area_summary()} 신규 {len(new_jobs)}건 ({datetime.now().strftime('%m/%d %H:%M')})"
         send_gmail(subject, render_email_html(new_jobs, len(seen_after)))
+        send_telegram(render_telegram_text(new_jobs, len(seen_after)))
     else:
-        print("신규 없음 - 메일 발송 생략")
+        print("신규 없음 - 알림 발송 생략")
     return 0
 
 
