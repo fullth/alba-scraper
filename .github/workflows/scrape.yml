@@ -2,8 +2,8 @@ name: 알바 스크래핑
 
 on:
   schedule:
-    # KST 19:00 = UTC 10:00
-    - cron: '0 10 * * *'
+    # KST 18:00 = UTC 09:00
+    - cron: '0 9 * * *'
   workflow_dispatch:
     inputs:
       force_email:

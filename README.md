@@ -1,6 +1,6 @@
 # alba-scraper
 
-일일/단기 알바를 매일 KST 19시에 스크래핑하고 Gmail + Telegram으로 발송한다.
+일일/단기 알바를 매일 KST 18시에 스크래핑하고 Gmail + Telegram으로 발송한다.
 
 기본값은 양천구 인근 (양천/강서/영등포/구로) 4개 자치구이며, 다른 지역으로 바꾸려면 `scrape.py`의 `ALBAMON_AREAS` 매핑만 교체하면 된다.
 
