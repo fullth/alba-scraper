@@ -151,63 +151,79 @@ def scrape_albamon(area_code: str, area_name: str) -> list[Job]:
     return jobs
 
 
+JOBKOREA_KEYWORDS = ["일일알바", "당일알바", "단기알바", "하루알바"]
+
+
 def scrape_jobkorea(area_code: str, area_name: str) -> list[Job]:
-    """잡코리아 검색 (지역코드 + 키워드 일일알바)."""
+    """잡코리아 검색.
+
+    잡코리아 SSR이 local 파라미터 일부 무시 → 키워드에 지역명을 직접 박는다.
+    "{area_name} {keyword}" 조합으로 4개 키워드를 순회 + 결과는 Job.area에 area_name 기록 후
+    is_short_term() + 후속 dedup으로 정리.
+    """
     jobs: list[Job] = []
-    for page in range(1, 4):
-        url = (
-            "https://www.jobkorea.co.kr/Search/?"
-            + urlencode(
-                {
-                    "stext": "일일알바",
-                    "local": f"I000,{area_code}",
-                    "Page_No": page,
-                    "tabType": "recruit",
-                }
-            )
-        )
-        html = fetch(url)
-        if not html:
-            break
-        soup = BeautifulSoup(html, "html.parser")
-        items = soup.select("article.list-item, article[class*='Flex_gap']")
-        if not items:
-            items = soup.select("article")
-        for li in items:
-            link = li.select_one("a[href*='Recruit/GI_Read'], a[href*='/recruit/']")
-            href = ""
-            job_id = ""
-            if link:
-                href = link.get("href", "")
-                m = re.search(r"GI_Read/(\d+)|/recruit/(\d+)", href)
-                if m:
-                    job_id = m.group(1) or m.group(2)
-            if not job_id:
-                continue
-            title_el = li.select_one("[class*='title']") or link
-            title = title_el.get_text(strip=True) if title_el else ""
-            company_el = li.select_one("[class*='corp'], [class*='company']")
-            company = company_el.get_text(strip=True) if company_el else ""
-            text = li.get_text(" ", strip=True)
-            jobs.append(
-                Job(
-                    source="jobkorea",
-                    job_id=job_id,
-                    title=title[:200],
-                    company=company[:100],
-                    area=area_name,
-                    wage="",
-                    work_time="",
-                    posted="",
-                    url=(
-                        href
-                        if href.startswith("http")
-                        else f"https://www.jobkorea.co.kr{href}"
-                    ),
-                    raw_text=text,
+    seen_ids: set[str] = set()
+    for keyword in JOBKOREA_KEYWORDS:
+        for page in range(1, 3):  # 키워드 × 2페이지
+            stext = f"{area_name} {keyword}"
+            url = (
+                "https://www.jobkorea.co.kr/Search/?"
+                + urlencode(
+                    {
+                        "stext": stext,
+                        "Page_No": page,
+                        "tabType": "recruit",
+                    }
                 )
             )
-        time.sleep(1.0)
+            html = fetch(url)
+            if not html:
+                break
+            soup = BeautifulSoup(html, "html.parser")
+            # 새 잡코리아 마크업: <div class="flex w-full gap-5 p-7"> 컨테이너
+            items = soup.select("div.flex.w-full.gap-5.p-7")
+            if not items:
+                # 구버전 fallback
+                items = soup.select("article")
+            for li in items:
+                link = li.select_one("a[href*='/Recruit/GI_Read/']")
+                if not link:
+                    continue
+                href = link.get("href", "")
+                m = re.search(r"GI_Read/(\d+)", href)
+                if not m:
+                    continue
+                job_id = m.group(1)
+                if job_id in seen_ids:
+                    continue
+                # 텍스트 한 번 추출 후 줄 단위 파싱
+                # 예: "신입 지원 가능 | 스크랩 | 제목 | 회사 | 지역 | 카테고리 | 급여 | 즉시지원 | 등록일 | 마감"
+                text = li.get_text(" \n ", strip=True)
+                lines = [ln.strip() for ln in text.split("\n") if ln.strip() and ln.strip() != "•"]
+                lines = [ln for ln in lines if ln not in ("스크랩", "신입 지원 가능")]
+                # 양천구가 실제 지역에 들어있는지 확인 (잡코리아는 키워드 매칭 결과라 다른 지역 섞일 수 있음)
+                title = lines[0] if lines else ""
+                company = lines[1] if len(lines) > 1 else ""
+                actual_area = next((ln for ln in lines if any(g in ln for g in ["서울", "경기", "인천"])), area_name)
+                wage = next((ln for ln in lines if "원" in ln and any(k in ln for k in ["시급", "일급", "월급", "연봉", "건별", "주급"])), "")
+                posted = next((ln for ln in lines if re.search(r"\d{2}/\d{2}", ln) and "등록" in ln), "")
+                full_url = href if href.startswith("http") else f"https://www.jobkorea.co.kr{href}"
+                jobs.append(
+                    Job(
+                        source="jobkorea",
+                        job_id=job_id,
+                        title=title[:200],
+                        company=company[:100],
+                        area=actual_area[:60],
+                        wage=wage[:60],
+                        work_time="",
+                        posted=posted[:30],
+                        url=full_url,
+                        raw_text=text.replace("\n", " ")[:500],
+                    )
+                )
+                seen_ids.add(job_id)
+            time.sleep(0.8)
     return jobs
 
 
@@ -310,8 +326,20 @@ def main() -> int:
         print(f"  -> {len(jobs)}건")
         all_jobs.extend(jobs)
 
-    short_term = [j for j in all_jobs if j.is_short_term()]
-    print(f"전체 {len(all_jobs)}건 중 단기 키워드 매칭 {len(short_term)}건")
+    # 잡코리아 결과는 키워드 매칭이라 실제 지역 필터 한 번 더 (양천/강서/영등포/구로)
+    target_gus = {"양천구", "강서구", "영등포구", "구로구"}
+
+    def in_target_area(job: Job) -> bool:
+        if job.source != "jobkorea":
+            return True
+        haystack = f"{job.area} {job.raw_text}"
+        return any(g in haystack for g in target_gus)
+
+    filtered = [j for j in all_jobs if in_target_area(j)]
+    short_term = [j for j in filtered if j.is_short_term()]
+    print(
+        f"전체 {len(all_jobs)}건 → 지역 필터 {len(filtered)}건 → 단기 키워드 매칭 {len(short_term)}건"
+    )
 
     seen = load_seen()
     new_jobs = [j for j in short_term if j.key not in seen]
